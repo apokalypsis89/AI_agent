@@ -4,7 +4,6 @@ from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtCore import QUrl, QObject, pyqtSlot
 from PyQt5.QtWebChannel import QWebChannel
 
-# Model Controller for Avatar
 class ModelController(QObject):
     def __init__(self):
         super().__init__()
@@ -13,17 +12,14 @@ class ModelController(QObject):
     def log(self, message):
         print("Model Viewer:", message)
 
-# Avatar Widget Class
 class AvatarWidget(QWidget):
     def __init__(self):
         super().__init__()
         self.layout = QVBoxLayout()
         self.layout.setContentsMargins(0, 0, 0, 0)
         
-        # Initialize web view
         self.web_view = QWebEngineView(self)
         
-        # Set up WebChannel for communication
         self.channel = QWebChannel()
         self.model_controller = ModelController()
         self.channel.registerObject("controller", self.model_controller)
@@ -32,22 +28,28 @@ class AvatarWidget(QWidget):
         self.layout.addWidget(self.web_view)
         self.setLayout(self.layout)
         
-        # Initialize with empty viewer
         self.initialize_viewer()
 
     def initialize_viewer(self):
-        """Initialize the 3D viewer without loading a model"""
         base_path = os.path.dirname(os.path.abspath(__file__))
         self.web_view.setHtml(self.get_viewer_html(), QUrl.fromLocalFile(base_path))
 
     def set_avatar_model(self, model_path):
-        """Load a model into the viewer"""
         if os.path.exists(model_path):
             model_url = QUrl.fromLocalFile(os.path.abspath(model_path)).toString()
             js_code = f"loadModel('{model_url}')"
             self.web_view.page().runJavaScript(js_code)
         else:
             print(f"Model file not found: {model_path}")
+
+    def set_background_image(self, image_path):
+        """Set the background image for the viewer"""
+        if os.path.exists(image_path):
+            image_url = QUrl.fromLocalFile(os.path.abspath(image_path)).toString()
+            js_code = f"setBackgroundImage('{image_url}')"
+            self.web_view.page().runJavaScript(js_code)
+        else:
+            print(f"Background image not found: {image_path}")
 
     def get_viewer_html(self):
         return """
@@ -81,6 +83,7 @@ class AvatarWidget(QWidget):
     <script>
         let scene, camera, renderer, controls, mixer, model;
         let loadingDiv;
+        let backgroundTexture = null;
         
         function init() {
             loadingDiv = document.getElementById('loading');
@@ -88,8 +91,8 @@ class AvatarWidget(QWidget):
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x2a2a2a);
             
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.z = 5;
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 1.5, 3);
             
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -98,6 +101,7 @@ class AvatarWidget(QWidget):
             controls = new THREE.OrbitControls(camera, renderer.domElement);
             controls.enableDamping = true;
             controls.dampingFactor = 0.05;
+            controls.target.set(0, 1, 0);
             
             const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
             scene.add(ambientLight);
@@ -108,6 +112,42 @@ class AvatarWidget(QWidget):
             
             animate();
             initWebChannel();
+        }
+
+        function setBackgroundImage(url) {
+            if (!url) return;
+            
+            const textureLoader = new THREE.TextureLoader();
+            textureLoader.load(
+                url,
+                function(texture) {
+                    scene.background = texture;
+                    
+                    // Adjust texture to cover the background properly
+                    const aspectRatio = window.innerWidth / window.innerHeight;
+                    const imageAspectRatio = texture.image.width / texture.image.height;
+                    
+                    if (aspectRatio > imageAspectRatio) {
+                        texture.repeat.set(1, imageAspectRatio / aspectRatio);
+                        texture.offset.set(0, (1 - texture.repeat.y) / 2);
+                    } else {
+                        texture.repeat.set(aspectRatio / imageAspectRatio, 1);
+                        texture.offset.set((1 - texture.repeat.x) / 2, 0);
+                    }
+                    
+                    backgroundTexture = texture;
+                    if (window.controller) {
+                        window.controller.log("Background image loaded successfully");
+                    }
+                },
+                undefined,
+                function(error) {
+                    console.error('Error loading background:', error);
+                    if (window.controller) {
+                        window.controller.log("Error loading background: " + error.message);
+                    }
+                }
+            );
         }
         
         function initWebChannel() {
@@ -154,8 +194,14 @@ class AvatarWidget(QWidget):
                     const size = box.getSize(new THREE.Vector3());
                     const maxDim = Math.max(size.x, size.y, size.z);
                     const scale = 2 / maxDim;
+                    
                     model.scale.multiplyScalar(scale);
                     model.position.sub(center.multiplyScalar(scale));
+                    
+                    const distance = Math.max(size.y * scale * 1.5, 2);
+                    camera.position.set(0, size.y * scale * 0.8, distance); // Adjusted height multiplier
+                    controls.target.set(0, size.y * scale * 0.6, 0); // Adjusted target height
+                    controls.update();
                     
                     loadingDiv.style.display = 'none';
                     if (window.controller) {
@@ -185,18 +231,32 @@ class AvatarWidget(QWidget):
             renderer.render(scene, camera);
         }
         
-        window.addEventListener('resize', function() {
+        function handleResize() {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
-        });
+            
+            // Update background texture scaling if it exists
+            if (backgroundTexture) {
+                const aspectRatio = window.innerWidth / window.innerHeight;
+                const imageAspectRatio = backgroundTexture.image.width / backgroundTexture.image.height;
+                
+                if (aspectRatio > imageAspectRatio) {
+                    backgroundTexture.repeat.set(1, imageAspectRatio / aspectRatio);
+                    backgroundTexture.offset.set(0, (1 - backgroundTexture.repeat.y) / 2);
+                } else {
+                    backgroundTexture.repeat.set(aspectRatio / imageAspectRatio, 1);
+                    backgroundTexture.offset.set((1 - backgroundTexture.repeat.x) / 2, 0);
+                }
+            }
+        }
         
+        window.addEventListener('resize', handleResize);
         document.addEventListener('DOMContentLoaded', init);
     </script>
 </body>
 </html>
 """
-
 
 # Example usage:
 if __name__ == "__main__":
@@ -208,10 +268,11 @@ if __name__ == "__main__":
     widget.resize(800, 600)
     widget.show()
     
-    # Load a model after a short delay (for testing)
+    # Load background and model after a short delay (for testing)
     from PyQt5.QtCore import QTimer
-    def load_test_model():
-        widget.set_avatar_model("models/avatar.glb")  # Replace with your model path
-    QTimer.singleShot(1000, load_test_model)
+    def load_test_content():
+        widget.set_background_image("background.jpeg")  # Replace with your background image path
+        widget.set_avatar_model("models/chloe.glb")  # Replace with your model path
+    QTimer.singleShot(1000, load_test_content)
     
     sys.exit(app.exec_())
