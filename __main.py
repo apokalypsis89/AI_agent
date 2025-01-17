@@ -1,22 +1,21 @@
 import sys
-import os
 import ollama
 from PyQt5.QtWidgets import (
     QApplication, 
-    QMainWindow, 
-    QPushButton, 
+    QMainWindow,  
     QVBoxLayout, 
     QHBoxLayout, 
     QWidget, 
-    QLineEdit, 
-    QTextEdit,
-    QFrame
+    QFrame,
+    QTextBrowser
 )
+
+import markdown
+from markdown.extensions import fenced_code, tables
+
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
-from PyQt5.QtCore import QUrl, Qt, QThread, pyqtSignal, QObject, pyqtSlot
+from PyQt5.QtCore import QUrl, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont
-from PyQt5.QtWebChannel import QWebChannel
-from PyQt5.QtWebEngineWidgets import QWebEngineView
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module="TTS.utils.io")
 
@@ -27,10 +26,7 @@ from __gui_style import *
 
 # System Prompt
 SYSTEM_PROMPT = """
-You are Alt, an assistant designed to provide actionable advice and help solve complex problems creatively. 
-Your responses should feel human-like, explanatory, practical, and engaging, avoiding generic suggestions. 
-Answer in concise, professional paragraphs with bullet points only if it is necessary. 
-Use clear questions and answer to understand the motives behind a problem and brainstorm with solutions.
+You are Alt, an assistant AI designed to help users with their queries.
 """
 
 # Ollama Worker Class (unchanged)
@@ -46,7 +42,7 @@ class OllamaWorker(QThread):
     def run(self):
         try:
             response = ollama.chat(
-                model='llama3.2',
+                model='qwen2.5',
                 messages=[
                     {
                         'role': 'system',
@@ -62,12 +58,89 @@ class OllamaWorker(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
+# MD file format for the text box.
+class MarkdownTextBrowser(QTextBrowser):
+    def __init__(self, placeholder_text="", parent=None):
+        super().__init__(parent)
+        self.setPlaceholderText(placeholder_text)
+        self.setOpenExternalLinks(True)
+        self.setStyleSheet("""
+            QTextBrowser {
+                background-color: #2b2b2b;
+                color: #ffffff;
+                border: none;
+                border-radius: 8px;
+                padding: 8px;
+                selection-background-color: #3d3d3d;
+            }
+            QTextBrowser:focus {
+                border: 1px solid #5294e2;
+            }
+        """)
+        
+        # Add CSS for Markdown styling
+        self.document().setDefaultStyleSheet("""
+            code {
+                background-color: #363636;
+                padding: 2px 4px;
+                border-radius: 4px;
+                font-family: 'Consolas', monospace;
+            }
+            pre {
+                background-color: #363636;
+                padding: 10px;
+                border-radius: 8px;
+                margin: 10px 0;
+            }
+            blockquote {
+                border-left: 4px solid #5294e2;
+                margin: 10px 0;
+                padding-left: 10px;
+                color: #a0a0a0;
+            }
+            h1, h2, h3, h4, h5, h6 {
+                color: #73b2ff;
+                margin: 10px 0;
+            }
+            table {
+                border-collapse: collapse;
+                margin: 10px 0;
+            }
+            th, td {
+                border: 1px solid #404040;
+                padding: 6px;
+            }
+            th {
+                background-color: #363636;
+            }
+        """)
+
+    def append_markdown(self, text):
+        # Configure Markdown with extensions
+        md = markdown.Markdown(extensions=[
+            'fenced_code',
+            'tables',
+            'nl2br',  # Convert newlines to <br>
+            'codehilite',  # Syntax highlighting
+            'sane_lists'  # Better list handling
+        ])
+        
+        # Convert Markdown to HTML
+        html = md.convert(text)
+        
+        # Append the HTML to the browser
+        self.append(html)
+        
+        # Scroll to bottom
+        scrollbar = self.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
 # Main Application Class
 class AIAssistantApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AI Assistant")
-        self.setGeometry(100, 100, 1200, 800)
+        self.setGeometry(100, 100, 1600, 900)
         self.setup_ui()
         
         # Initialize avatar model after a short delay
@@ -76,19 +149,21 @@ class AIAssistantApp(QMainWindow):
     
     def load_initial_model(self):
         # Replace with your actual model path
-        model_path = "models/avatar_3.glb"
+        model_path = "models/kara.glb"
+        model_background = "background.jpeg"
         self.avatar_widget.set_avatar_model(model_path)
+        self.avatar_widget.set_background_image(model_background)
         self.log_status("Loading initial 3D model...")
     
     def setup_ui(self):
         # Set up the main window styling
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #1e1e1e;
+                background-color: #8e8e8e;
             }
             QWidget {
                 background-color: #1e1e1e;
-                color: #ffffff;
+                color: #1e1e1e;
             }
         """)
         
@@ -158,16 +233,16 @@ class AIAssistantApp(QMainWindow):
         self.main_layout.addWidget(self.right_panel, stretch=2)
 
     def setup_chat_components(self):
-        # Chat log
-        self.chat_log = StyledTextEdit(placeholder_text="Chat logs will appear here...")
+        # MarkdownTextBrowser
+        self.chat_log = MarkdownTextBrowser(placeholder_text="Chat logs will appear here...")
         self.chat_log.setReadOnly(True)
         self.right_layout.addWidget(self.chat_log, stretch=2)
         
         # Input area
         self.setup_input_area()
         
-        # Status log
-        self.status_log = StyledTextEdit(placeholder_text="Status updates will appear here...")
+        # Status log can remain as is or also be converted to Markdown
+        self.status_log = MarkdownTextBrowser(placeholder_text="Status updates will appear here...")
         self.status_log.setReadOnly(True)
         self.status_log.setMaximumHeight(150)
         self.right_layout.addWidget(self.status_log)
@@ -212,13 +287,16 @@ class AIAssistantApp(QMainWindow):
     def get_timestamp(self):
         from datetime import datetime
         return datetime.now().strftime("%H:%M:%S")
-        
+
     def append_chat_log(self, user_input, response):
-        self.chat_log.append(f'<span style="color: #5294e2;">You:</span> {user_input}')
-        self.chat_log.append(f'<span style="color: #73b2ff;">AI:</span> {response}')
-        self.chat_log.append("")
-        scrollbar = self.chat_log.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        # Format messages with Markdown
+        user_message = f"### 👤 Me:\n{user_input}\n"
+        ai_message = f"### 🤖 AI:\n{response}\n"
+        
+        # Append messages using Markdown
+        self.chat_log.append_markdown(user_message)
+        self.chat_log.append_markdown(ai_message)
+        self.chat_log.append_markdown("---\n")  # Add separator between messages
         
     def process_text_input(self):
         text = self.input_bar.text().strip()
