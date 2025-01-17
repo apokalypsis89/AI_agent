@@ -1,13 +1,7 @@
 from PyQt5.QtWidgets import (
-    QApplication, 
-    QMainWindow, 
-    QPushButton, 
-    QVBoxLayout, 
-    QHBoxLayout, 
-    QWidget, 
     QLineEdit, 
     QTextEdit,
-    QFrame
+    QPushButton
 )
 
 # Styled Component Classes
